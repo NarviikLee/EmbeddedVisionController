@@ -1,0 +1,24 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+.aws/
+
+# Local agent settings
+.codex/
+.agents/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
