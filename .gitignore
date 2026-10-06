@@ -22,3 +22,12 @@ env/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Python tooling and packaging artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/

@@ -1,0 +1,4 @@
+# Object detection dependencies for the locally checked Python 3.8 environment
+-r requirements.txt
+numpy==1.24.4
+tflite-runtime==2.14.0
