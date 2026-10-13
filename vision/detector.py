@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
-import tflite_runtime.interpreter as tflite
+try:
+    import tflite_runtime.interpreter as tflite
+except ImportError:
+    from ai_edge_litert import interpreter as tflite
 
 
 def load_label(label_path):

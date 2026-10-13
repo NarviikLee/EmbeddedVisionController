@@ -11,6 +11,9 @@ Python 측 밝기 분석과 시리얼 송수신 코드가 구현되어 있으며
 - `scripts/test_input.py`: 점수 0.5 이상인 검출 중 첫 번째 `person`을 선택하고, 방향 변경 시 `TRACK` 패킷 전송 후 응답 수신
 - `communication/serial_comm.py`: `send_track()` 추가
 - 기존 추론 시간 출력 제거
+- 객체 검출 스크립트의 기본 실행을 `HEADLESS = True`로 변경: 창 없이 실행하며 `Ctrl+C`로 종료
+- 검출 결과가 있으면 첫 번째 결과를 콘솔에 출력 (TRACK 대상인 첫 번째 `person`과 다를 수 있음)
+- `vision/detector.py`: `tflite_runtime` import 실패 시 `ai_edge_litert` 사용
 
 `app/main.py`의 밝기 기반 `STATE` 전송은 그대로 유지됩니다. 객체 검출 및 방향 전송은 별도 스크립트로 실행하며, 실제 STM32 동작은 검증하지 않았습니다.
 
@@ -86,7 +89,7 @@ EmbeddedVisionController/
 
 ## 객체 검출 모델
 
-프로젝트에 포함된 `models/efficientdet_lite0.tflite`는 카메라 영상에서 여러 객체의 위치와 클래스를 검출하는 데 사용하는 TensorFlow Lite 모델입니다. 파일 크기는 약 4.4 MiB이며, 현재 스크립트는 CPU에서 `tflite_runtime.Interpreter`로 실행합니다.
+프로젝트에 포함된 `models/efficientdet_lite0.tflite`는 카메라 영상에서 여러 객체의 위치와 클래스를 검출하는 데 사용하는 TensorFlow Lite 모델입니다. 파일 크기는 약 4.4 MiB이며, `vision/detector.py`는 CPU에서 `tflite_runtime.Interpreter`로 실행하며, 해당 모듈 import가 실패하면 `ai_edge_litert.interpreter.Interpreter`를 사용합니다.
 
 로컬 모델 파일에서 확인한 텐서 정보는 다음과 같습니다.
 
@@ -98,7 +101,7 @@ EmbeddedVisionController/
 | 출력 2 | `[1, 25]`, `float32` | 검출 점수 |
 | 출력 3 | `[1]`, `float32` | 검출 개수 |
 
-입력 텐서의 양자화 scale은 `0.0078125`, zero point는 `127`입니다. 현재 코드는 별도 실수 정규화 없이 RGB `uint8` 픽셀을 전달합니다. 출력 배열은 최대 25개 검출을 담으며, 화면에는 점수 `0.5` 이상인 결과만 표시합니다.
+입력 텐서의 양자화 scale은 `0.0078125`, zero point는 `127`입니다. 현재 코드는 별도 실수 정규화 없이 RGB `uint8` 픽셀을 전달합니다. 출력 배열은 최대 25개 검출을 담으며, 점수 `0.5` 이상인 결과만 후처리하고 프레임에 표시 정보를 그립니다. 기본 headless 실행에서는 창을 표시하지 않습니다.
 
 `models/coco_labels.txt`는 클래스 ID를 사람이 읽을 수 있는 이름으로 변환합니다. 사람(`person`), 자전거(`bicycle`), 자동차(`car`) 등의 라벨이 있으며, 90줄 중 일부는 `n/a` 자리 표시자입니다. 코드에서는 클래스 ID를 목록 인덱스로 직접 사용하므로 모델과 라벨 순서가 일치해야 합니다.
 
@@ -120,7 +123,7 @@ EmbeddedVisionController/
 
 사람이 검출되지 않으면 메시지를 보내지 않고 이전 방향을 유지합니다. 같은 방향으로 사람이 다시 나타나면 재전송하지 않습니다. 여러 사람이 있는 경우 선택 대상이 프레임마다 바뀔 수 있으며, 동일 인물을 식별하여 유지하는 추적은 구현되어 있지 않습니다.
 
-`q` 키로 종료하며 카메라, 시리얼 연결 및 OpenCV 창을 정리합니다. 현재 추론 시간이나 FPS는 출력하지 않습니다. 전처리는 모델 입력 크기를 읽어 사용하지만, RGB `uint8` 입력 및 출력 텐서 순서를 가정하므로 다른 모델로 교체하려면 확인이 필요합니다.
+기본값은 `HEADLESS = True`로, 카메라 창 없이 실행하고 `Ctrl+C`로 종료합니다. 화면을 보려면 `scripts/test_input.py`의 `HEADLESS`를 `False`로 변경합니다. 이때는 GUI 환경이 필요하며 `q` 키로도 종료할 수 있습니다. 종료 시 카메라와 시리얼 연결을 정리하고, 화면 표시 모드에서는 OpenCV 창도 정리합니다. 검출 결과가 있으면 첫 번째 결과를 매 프레임 콘솔에 출력하며, 이 결과는 TRACK 전송 대상으로 선택한 `person`과 다를 수 있습니다. 현재 추론 시간이나 FPS는 출력하지 않습니다. 전처리는 모델 입력 크기를 읽어 사용하지만, RGB `uint8` 입력 및 출력 텐서 순서를 가정하므로 다른 모델로 교체하려면 확인이 필요합니다.
 
 ## 시리얼 통신 프로토콜
 
@@ -164,7 +167,7 @@ Python 측에는 외부 장치로 상태를 보내고 응답을 읽는 인터페
 
 ## 설치 및 실행
 
-Python 3와 pip, 카메라, OpenCV 창을 표시할 수 있는 GUI 환경이 필요합니다. 통합 실행에는 `/dev/ttyACM0`에 접근할 권한과 프로토콜에 맞게 응답하는 외부 장치도 필요합니다.
+Python 3와 pip, 카메라가 필요합니다. 밝기 메인 실행과 카메라 단독 확인에는 OpenCV 창을 표시할 수 있는 GUI 환경도 필요합니다. 통합 실행에는 `/dev/ttyACM0`에 접근할 권한과 프로토콜에 맞게 응답하는 외부 장치도 필요합니다.
 
 프로젝트 루트에서 실행합니다.
 
@@ -210,9 +213,9 @@ python3 -m communication.protocol
 
 ### 객체 검출 스크립트 실행
 
-객체 검출에는 `tflite_runtime` 모듈이 추가로 필요합니다. `requirements-vision.txt`는 기본 의존성과 객체 검출 의존성을 함께 설치합니다. 사용 중인 Python 버전과 플랫폼을 지원하는 `tflite-runtime` 배포판이 필요하며, 설치 및 실행 호환성은 별도로 확인해야 합니다.
+객체 검출에는 `tflite_runtime` 또는 대체 런타임인 `ai_edge_litert` 모듈이 필요합니다. `requirements-vision.txt`는 기존 Python 3.8 환경을 기준으로 `numpy==1.24.4`와 `tflite-runtime==2.14.0`을 지정하며, `ai-edge-litert`는 포함하지 않습니다. 사용 중인 Python 버전과 플랫폼에 맞는 런타임이 필요합니다.
 
-현재 모델 로드를 확인한 환경은 Python `3.8.10`, NumPy `1.24.4`, OpenCV `4.9.0.80`, `tflite-runtime` `2.14.0`입니다. 해당 Python 버전과 플랫폼에서 사용할 수 있는 설치 예시는 다음과 같습니다.
+기존에 모델 로드를 확인한 환경은 Python `3.8.10`, NumPy `1.24.4`, OpenCV `4.9.0.80`, `tflite-runtime` `2.14.0`입니다. 해당 Python 버전과 플랫폼에서 사용할 수 있는 설치 예시는 다음과 같습니다.
 
 ```bash
 # 프로젝트 루트에서 가상환경 생성 및 활성화 (이미 생성했다면 활성화만 실행)
@@ -229,6 +232,15 @@ python3 -m scripts.inspect_model
 python3 -m scripts.test_input
 ```
 
+`tflite-runtime`을 설치할 수 없는 환경에서는 기본 의존성과 대체 런타임을 설치할 수 있습니다. 아래 조합은 현재 로컬 Python `3.10.12`에서 확인한 기준이며, 다른 Python 버전과 플랫폼의 호환성은 별도 확인이 필요합니다.
+
+```bash
+python3 -m pip install -r requirements.txt "numpy==1.26.4" "ai-edge-litert==2.3.0"
+python3 -m scripts.test_input
+```
+
+`scripts/inspect_model.py`는 여전히 `tflite_runtime`을 직접 import하므로 대체 런타임만 설치한 환경에서는 실행되지 않습니다. 런타임 대체 처리는 `vision/detector.py`에만 적용되어 있습니다.
+
 모델과 라벨 파일은 `models/`에 포함되어 있으므로 별도로 다운로드할 필요는 없습니다.
 
 `No matching distribution found`가 나오면 사용 중인 Python 버전 또는 플랫폼에 맞는 패키지가 없는지 확인해야 합니다. 위 버전 조합은 현재 로컬 환경에서 모델 로드를 확인한 기준이며, 다른 환경에서의 설치 성공은 검증하지 않았습니다. 현재 로컬 `.venv`에는 `pyserial` `3.5`도 설치되어 있으며, 모듈 import를 확인했습니다. 실제 시리얼 장치 통신은 별도 검증이 필요합니다.
@@ -237,7 +249,7 @@ python3 -m scripts.test_input
 
 `scripts.inspect_model`은 출력 텐서 정보도 조회하지만 콘솔에는 입력 텐서 정보만 출력합니다. 2026-10-06 로컬 `.venv`에서 모델 로드·텐서 할당 및 합성 이미지 추론을 확인했습니다. Python 소스 문법과 `STATE` 패킷 생성·파싱 왕복 검사도 통과했습니다. 카메라 객체 검출 및 실제 시리얼 통신 실행은 이번 확인에 포함되지 않았습니다.
 
-`scripts/test_input.py` 실행에는 카메라·GUI 환경뿐 아니라 `/dev/ttyACM0`에 연결된 외부 장치와 포트 접근 권한이 필요합니다. 장치는 TRACK 전송 후 1초 타임아웃 안에 LF로 끝나는 `COMMAND:PAYLOAD` 형식의 응답을 보내야 합니다. 시리얼 연결 실패나 응답 타임아웃이 발생하면 실행이 종료됩니다. `scripts.inspect_model`은 카메라와 시리얼 장치 없이 실행할 수 있습니다. 모델 로드와 라벨 파일 읽기는 카메라 처리의 `try` 블록 이전에 이루어지므로, 의존성이나 파일 경로 오류는 해당 블록에서 처리되지 않습니다.
+`scripts/test_input.py`의 기본 headless 실행에는 GUI 없이 카메라와 `/dev/ttyACM0`에 연결된 외부 장치와 포트 접근 권한이 필요합니다. 장치는 TRACK 전송 후 1초 타임아웃 안에 LF로 끝나는 `COMMAND:PAYLOAD` 형식의 응답을 보내야 합니다. 시리얼 연결 실패나 응답 타임아웃이 발생하면 실행이 종료됩니다. `scripts.inspect_model`은 카메라와 시리얼 장치 없이 실행할 수 있습니다. 모델 로드와 라벨 파일 읽기는 카메라 처리의 `try` 블록 이전에 이루어지므로, 의존성이나 파일 경로 오류는 해당 블록에서 처리되지 않습니다.
 
 ## 검증 범위 및 현재 한계
 
@@ -254,3 +266,5 @@ python3 -m scripts.test_input
 ### 2026-10-13 확인 결과
 
 변경된 Python 소스 문법, 합성 이미지 모델 추론·후처리, 방향 판단 경계값 및 모의 시리얼의 `TRACK:LEFT` 패킷 생성을 확인했습니다. 실제 카메라 검출, 외부 장치 응답 및 장치 제어는 이번 검사에 포함되지 않았습니다.
+
+추가 변경 확인: Python `3.10.12`, NumPy `1.26.4`, OpenCV `4.9.0`, `ai-edge-litert` `2.3.0` 환경에서 변경된 두 Python 파일의 문법과 합성 이미지 추론·후처리를 확인했습니다. 대체 런타임이 실제로 선택되었으며, 카메라·GUI·시리얼 통신 및 `Ctrl+C` 자원 정리는 실행 검증하지 않았습니다.

@@ -1,8 +1,8 @@
 import cv2
 from vision.detector import load_label, load_model, preprocess_frame, run_inference,postprocess_detections
 from communication.serial_comm import connect_serial, send_track,receive_packet
-
-if __name__ == '__main__':    
+HEADLESS = True
+if __name__ == '__main__':
     interpreter,input_details,output_details = load_model('models/efficientdet_lite0.tflite')
     labels = load_label('models/coco_labels.txt')
     cap = None
@@ -24,6 +24,8 @@ if __name__ == '__main__':
             boxes ,classes,scores,num_detections = run_inference(interpreter, input_details,output_details,input_tensor)
             res,results = postprocess_detections(frame,labels,boxes,classes,scores,num_detections)
             # print(results)
+            if results:
+                print(results[0])
             target = None
             for result in results:
                 if result["label"] =="person":
@@ -37,16 +39,20 @@ if __name__ == '__main__':
                     print(f"TX -> TRACK:{direction} | {sent_bytes} bytes")
                     print(f"Rx <- {command}:{payload}")
                     previous_direction = direction
-            cv2.imshow("Camera",res)
-            key = cv2.waitKey(1)
-            if key == ord('q'):
-                break
+            if not HEADLESS:
+                cv2.imshow("Camera", res)
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    except KeyboardInterrupt:
+        print("\n[INFO] Stopped by user.")
     except Exception as e:
-        print(f"Unexpected error: {e}")        
+        print(f"Unexpected error: {e}")
     finally:
         print("[INFO] Releasing camera...")
         if cap is not None:
             cap.release()
         if ser is not None:
             ser.close()
-        cv2.destroyAllWindows()
+        if not HEADLESS:
+            cv2.destroyAllWindows()
