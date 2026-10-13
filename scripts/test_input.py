@@ -1,21 +1,16 @@
-import time
 import cv2
-import numpy as np
-import tflite_runtime.interpreter as tflite
+from vision.detector import load_label, load_model, preprocess_frame, run_inference,postprocess_detections
+from communication.serial_comm import connect_serial, send_track,receive_packet
 
-interpreter = tflite.Interpreter(model_path='models/efficientdet_lite0.tflite')
-interpreter.allocate_tensors()
-
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-# print(input_details)
-# print(output_details)
-with open('models/coco_labels.txt', 'r') as f:
-    labels = [line.strip() for line in f.readlines()]
-if __name__ == '__main__':
+if __name__ == '__main__':    
+    interpreter,input_details,output_details = load_model('models/efficientdet_lite0.tflite')
+    labels = load_label('models/coco_labels.txt')
     cap = None
+    previous_direction = None
+    ser = None
     try:
         cap = cv2.VideoCapture(0)
+        ser = connect_serial()
         if not cap.isOpened():
             print("Camera Open Failed")
             exit()
@@ -25,42 +20,24 @@ if __name__ == '__main__':
             if not ret:
                 print("Frame read failed")
                 break
-            resize_frame = cv2.resize(frame,(320,320))
-            rgb = cv2.cvtColor(resize_frame,cv2.COLOR_BGR2RGB)
-            input_tensor = rgb[np.newaxis]
-            # print("shape:", input_tensor.shape)
-            # print("dtype:", input_tensor.dtype)
-            input_index = input_details[0]['index']
-            interpreter.set_tensor(input_index,input_tensor)
-            start = time.perf_counter()
-            interpreter.invoke()
-            end = time.perf_counter()
-            inference_time  = (end-start) * 1000
-            print(f"Inference time: {inference_time:.2f} ms")
-            boxes = interpreter.get_tensor(output_details[0]['index'])
-            classes = interpreter.get_tensor(output_details[1]['index'])
-            scores = interpreter.get_tensor(output_details[2]['index'])
-            num_detections = interpreter.get_tensor(output_details[3]['index'])
-
-            count  = int(num_detections[0])
-            h, w = frame.shape[:2]
-            for i in range(count):
-                score = scores[0][i]
-                if score <0.5:
-                    continue
-                box = boxes[0][i]
-                y_min,x_min,y_max,x_max = box
-                xmin_pixel = max(0, min(w - 1, int(x_min * w)))
-                xmax_pixel = max(0, min(w - 1, int(x_max * w)))
-                ymin_pixel = max(0, min(h - 1, int(y_min * h)))
-                ymax_pixel = max(0, min(h - 1, int(y_max * h)))
-                class_id = int(classes[0][i])
-                label = labels[class_id]
-                text = f"{label} {score:.2f}"
-                cv2.putText(frame,text,(xmin_pixel, ymin_pixel),cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),2)
-                cv2.rectangle(frame,(xmin_pixel,ymin_pixel), (xmax_pixel,ymax_pixel), (0,255,0),2)
-            cv2.imshow("Camera",frame)
-            # cv2.imshow("ROI GRAY",gray_roi)
+            input_tensor = preprocess_frame(frame, input_details[0]['shape'])
+            boxes ,classes,scores,num_detections = run_inference(interpreter, input_details,output_details,input_tensor)
+            res,results = postprocess_detections(frame,labels,boxes,classes,scores,num_detections)
+            # print(results)
+            target = None
+            for result in results:
+                if result["label"] =="person":
+                    target = result
+                    break
+            if target is not None:
+                direction = target["direction"]
+                if direction != previous_direction:
+                    sent_bytes = send_track(ser, direction)
+                    command,payload = receive_packet(ser)
+                    print(f"TX -> TRACK:{direction} | {sent_bytes} bytes")
+                    print(f"Rx <- {command}:{payload}")
+                    previous_direction = direction
+            cv2.imshow("Camera",res)
             key = cv2.waitKey(1)
             if key == ord('q'):
                 break
@@ -70,4 +47,6 @@ if __name__ == '__main__':
         print("[INFO] Releasing camera...")
         if cap is not None:
             cap.release()
+        if ser is not None:
+            ser.close()
         cv2.destroyAllWindows()

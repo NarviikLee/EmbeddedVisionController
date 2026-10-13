@@ -27,6 +27,11 @@ def receive_packet(ser):
 
 	return command, payload
 
+def send_track(ser, direction):
+	packet = create_packet("TRACK",direction)
+	sent_bytes = ser.write(packet)
+	return sent_bytes
+
 
 
 if __name__ == '__main__':	
