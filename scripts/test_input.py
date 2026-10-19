@@ -1,11 +1,13 @@
 import cv2
 import argparse
+import time
 from vision.detector import (
     load_label,
     load_model,
     preprocess_frame,
     run_inference,
     postprocess_detections,
+    determine_direction,
 )
 
 from communication.serial_comm import (
@@ -20,6 +22,7 @@ def find_target(results, target_label="person"):
             return result
     return None
 if __name__ == '__main__':
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--headless",
@@ -34,9 +37,15 @@ if __name__ == '__main__':
     args = parser.parse_args()
     interpreter, input_details, output_details = load_model('models/efficientdet_lite0.tflite')
     labels = load_label('models/coco_labels.txt')
+
+
     cap = None
-    previous_direction = None
+    previous_direction = "CENTER"
     ser = None
+    last_sent_direction = None
+    last_move_time = 0.0
+
+    MOVE_INTERVAL = 0.2
     try:
         cap = cv2.VideoCapture(0)
         ser = connect_serial()
@@ -70,13 +79,48 @@ if __name__ == '__main__':
                 print(results[0])
             target = find_target(results)
             if target is not None:
-                direction = target["direction"]
-                if direction != previous_direction:
+                center_x = target["center_x"]
+                frame_width = frame.shape[1]
+
+                direction, error_x = determine_direction(
+                    center_x,
+                    frame_width,
+                    previous_direction
+                )
+
+                if args.verbose:
+                    print(f"direction={direction}, error_x={error_x}")
+
+                now = time.monotonic()
+
+                # 히스테리시스 상태는 매 프레임 갱신
+                previous_direction = direction
+
+                should_send = False
+
+                if direction == "CENTER":
+                    # CENTER 진입 시 한 번만 전송
+                    if last_sent_direction != "CENTER":
+                        should_send = True
+
+                else:
+                    # LEFT/RIGHT로 새로 바뀌면 즉시 전송
+                    if direction != last_sent_direction:
+                        should_send = True
+
+                    # 같은 LEFT/RIGHT가 계속되면 일정 주기로 반복 전송
+                    elif now - last_move_time >= MOVE_INTERVAL:
+                        should_send = True
+
+                if should_send:
                     sent_bytes = send_track(ser, direction)
                     command, payload = receive_packet(ser)
+
                     print(f"TX -> TRACK:{direction} | {sent_bytes} bytes")
                     print(f"Rx <- {command}:{payload}")
-                    previous_direction = direction
+
+                    last_sent_direction = direction
+                    last_move_time = now
             if not args.headless:
                 cv2.imshow("Camera", res)
 

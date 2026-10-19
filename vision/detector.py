@@ -20,18 +20,30 @@ def load_model(model_path):
 	return interpreter, input_details,output_details
 
 
-def determine_direction(center_x, frame_width, dead_zone=60):
+def determine_direction(center_x, frame_width, prev_direction,
+                        enter_dead_zone=50, exit_dead_zone=70):
     frame_center = frame_width // 2
+    error_x = center_x - frame_center
 
-    left_boundary = frame_center - dead_zone
-    right_boundary = frame_center + dead_zone
+    if prev_direction == "CENTER":
+        if error_x < -exit_dead_zone:
+            return "LEFT", error_x
+        elif error_x > exit_dead_zone:
+            return "RIGHT", error_x
+        else:
+            return "CENTER", error_x
 
-    if center_x < left_boundary:
-        return "LEFT"
-    elif center_x > right_boundary:
-        return "RIGHT"
-    else:
-        return "CENTER"
+    elif prev_direction == "LEFT":
+        if error_x >= -enter_dead_zone:
+            return "CENTER", error_x
+        return "LEFT", error_x
+
+    elif prev_direction == "RIGHT":
+        if error_x <= enter_dead_zone:
+            return "CENTER", error_x
+        return "RIGHT", error_x
+
+    return "CENTER", error_x
 
 def preprocess_frame(frame,input_shape):
 	height = input_shape[1]
@@ -68,14 +80,18 @@ def postprocess_detections(frame,labels,boxes,classes,scores,num_detections):
 		class_id = int(classes[0][i])
 		label = labels[class_id]
 		center_x = (xmin_pixel + xmax_pixel) // 2
-		direction = determine_direction(center_x=center_x,frame_width=w)
-		text = f"{label} {score:.2f} {direction}"
+		# direction, error_x = determine_direction(
+		# 	center_x = center_x,
+		# 	frame_width=frame_width,
+		# 	prev_direction=prev_direction
+		# )
+		# print(direction, error_x)
+		text = f"{label} {score:.2f}"
 		results.append({
 		    "label": label,
 		    "score": float(score),
 		    "center_x": center_x,
 		    "bbox": (xmin_pixel, ymin_pixel, xmax_pixel, ymax_pixel),
-		    "direction": direction
 		})
 		cv2.putText(frame,text,(xmin_pixel, ymin_pixel),cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),2)
 		cv2.rectangle(frame,(xmin_pixel,ymin_pixel), (xmax_pixel,ymax_pixel), (0,255,0),2)
