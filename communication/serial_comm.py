@@ -1,8 +1,8 @@
 import serial
 from communication.protocol import create_packet,parse_packet
 
-PORT = "/dev/ttyACM0"
-# PORT = "/dev/ttyAMA0"
+PORT = "/dev/ttyS0"
+# PORT = "/dev/ttyACM0"
 BAUDRATE = 115200
 TIMEOUT = 1
 ser = None

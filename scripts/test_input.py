@@ -54,6 +54,7 @@ if __name__ == '__main__':
             exit()
         while True:
             ret, frame = cap.read()
+            frame = cv2.flip(frame, -1)
             if not ret:
                 print("Frame read failed")
                 break

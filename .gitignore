@@ -31,3 +31,6 @@ Thumbs.db
 .coverage.*
 htmlcov/
 *.egg-info/
+
+# Local-only project tests
+/tests/
