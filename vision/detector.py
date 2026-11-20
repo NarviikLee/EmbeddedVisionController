@@ -80,6 +80,7 @@ def postprocess_detections(frame,labels,boxes,classes,scores,num_detections):
 		class_id = int(classes[0][i])
 		label = labels[class_id]
 		center_x = (xmin_pixel + xmax_pixel) // 2
+		center_y = (ymin_pixel + ymax_pixel) // 2
 		# direction, error_x = determine_direction(
 		# 	center_x = center_x,
 		# 	frame_width=frame_width,
@@ -91,9 +92,11 @@ def postprocess_detections(frame,labels,boxes,classes,scores,num_detections):
 		    "label": label,
 		    "score": float(score),
 		    "center_x": center_x,
+		    "center_y": center_y,
 		    "bbox": (xmin_pixel, ymin_pixel, xmax_pixel, ymax_pixel),
 		})
 		cv2.putText(frame,text,(xmin_pixel, ymin_pixel),cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),2)
 		cv2.rectangle(frame,(xmin_pixel,ymin_pixel), (xmax_pixel,ymax_pixel), (0,255,0),2)
 
 	return frame,results
+

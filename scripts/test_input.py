@@ -44,8 +44,9 @@ if __name__ == '__main__':
     ser = None
     last_sent_direction = None
     last_move_time = 0.0
-
-    MOVE_INTERVAL = 0.2
+    alpha_x = 0.4
+    filtered_center_x = None
+    filtered_center_y = None
     try:
         cap = cv2.VideoCapture(0)
         ser = connect_serial()
@@ -53,11 +54,12 @@ if __name__ == '__main__':
             print("Camera Open Failed")
             exit()
         while True:
+            start_time = time.monotonic()
             ret, frame = cap.read()
-            frame = cv2.flip(frame, -1)
             if not ret:
                 print("Frame read failed")
                 break
+            frame = cv2.flip(frame, -1)
             input_tensor = preprocess_frame(frame, input_details[0]['shape'])
 
             boxes, classes, scores, num_detections = run_inference(
@@ -81,21 +83,55 @@ if __name__ == '__main__':
             target = find_target(results)
             if target is not None:
                 center_x = target["center_x"]
+                center_y = target["center_y"]
                 frame_width = frame.shape[1]
+                frame_height = frame.shape[0]
+                frame_center_y = frame_height // 2
+                error_y = center_y - frame_center_y
+                if error_y < -60:
+                    tilt_direction = "UP"
+                elif error_y > 60:
+                    tilt_direction = "DOWN"
+                else:
+                    tilt_direction = "CENTER"
+                if filtered_center_x is None:
+                    filtered_center_x = float(center_x)
+                else:
+                    filtered_center_x = (
+                        alpha_x * center_x
+                        + (1 - alpha_x) * filtered_center_x
+                    )
 
                 direction, error_x = determine_direction(
-                    center_x,
+                    filtered_center_x,
                     frame_width,
-                    previous_direction
+                    previous_direction,
+                    enter_dead_zone=60,
+                    exit_dead_zone=85
                 )
 
                 if args.verbose:
-                    print(f"direction={direction}, error_x={error_x}")
+                    print(
+                        f"PAN={direction}, "
+                        f"error_x={error_x:.1f}, "
+                        f"TILT={tilt_direction}, "
+                        f"error_y={error_y}"
+                    )
 
                 now = time.monotonic()
 
                 # 히스테리시스 상태는 매 프레임 갱신
                 previous_direction = direction
+                abs_error = abs(error_x)
+                # 중앙에서 멀수록 빠르게, 가까울수록 천천히 명령 전송
+                if abs_error > 150:
+                    move_interval = 0.20
+                elif abs_error > 100:
+                    move_interval = 0.30
+                elif abs_error > 70:
+                    move_interval = 0.40
+                else:
+                    move_interval = 0.50
 
                 should_send = False
 
@@ -110,18 +146,23 @@ if __name__ == '__main__':
                         should_send = True
 
                     # 같은 LEFT/RIGHT가 계속되면 일정 주기로 반복 전송
-                    elif now - last_move_time >= MOVE_INTERVAL:
+                    elif now - last_move_time >= move_interval:
                         should_send = True
 
                 if should_send:
                     sent_bytes = send_track(ser, direction)
-                    command, payload = receive_packet(ser)
-
-                    print(f"TX -> TRACK:{direction} | {sent_bytes} bytes")
-                    print(f"Rx <- {command}:{payload}")
-
+                    # try:
+                    #     command, payload = receive_packet(ser)
+                    #     print(f"RX <- {command}:{payload}")
+                    # except TimeoutError:
+                    #     print("[WARN] UART response timeout")
                     last_sent_direction = direction
                     last_move_time = now
+            elapsed = time.monotonic() - start_time
+
+            if elapsed > 0:
+                fps = 1.0 / elapsed
+                print(f"FPS: {fps:.2f}, Frame Time: {elapsed * 1000:.1f} ms")
             if not args.headless:
                 cv2.imshow("Camera", res)
 
