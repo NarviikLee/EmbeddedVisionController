@@ -10,10 +10,12 @@ OpenCV로 카메라 영상의 밝기를 분석하고, 밝기 상태가 바뀌면
 - 가로 오차 크기에 따라 반복 명령 간격을 0.20~0.50초로 조절해 중앙 부근의 과이동·좌우 왕복 감소
 - 추적 루프의 UART echo/ACK 대기를 제거해 명령 전송 중에도 사용자 측정 약 4~5 FPS 유지
 - VMware Serial Port의 Connected 설정 문제를 해결해 `/dev/ttyS0` 통신 복구
-- `center_y`, `error_y`와 TILT UP/CENTER/DOWN 판단 구현 및 실제 검출 결과로 검증
+- TILT 전용 UART 송신과 독립 전송 상태 추가: UP/DOWN 반복 간격 0.4초, CENTER 진입 시 한 번 전송
+- 사용자 STM32 파서·물리 방향 매핑 수정 후 PAN/TILT 실제 동시 추적 확인
+- `scripts/test_tilt.py` 추가: UP/DOWN 각 4회 반복 전송으로 하드웨어 이동 확인
 - 프레임 읽기 성공 확인 후 영상 180도 보정을 수행하도록 순서 수정
 
-PAN 실제 서보 추적은 동작하며, TILT는 방향 판단까지만 완료했습니다. TILT UART 명령·STM32 파싱·서보 연동이 다음 단계입니다. 하드웨어 관찰과 성능 수치는 사용자 제공 결과입니다. [이번 작업 기록](docs/2026-11-23-tracking-stability.md)과 [이전 구성 기록](docs/2026-11-18-pan-tracking.md)을 참고하세요.
+PAN과 TILT 모두 Vision 기반 실제 서보 추적을 확인했습니다. 다음 단계는 PAN 설정을 유지하며 TILT STEP·dead zone·필터·반복 간격을 튜닝하는 것입니다. 하드웨어 관찰과 성능 수치는 사용자 제공 결과입니다. [PAN 안정화 기록](docs/2026-11-23-tracking-stability.md), [PAN/TILT 통합 기록](docs/2026-11-23-pan-tilt-integration.md)과 [이전 구성 기록](docs/2026-11-18-pan-tracking.md)을 참고하세요.
 
 ## 구현된 기능
 
@@ -25,7 +27,8 @@ PAN 실제 서보 추적은 동작하며, TILT는 방향 판단까지만 완료�
 - 카메라 화면 표시, `q` 키 종료 및 자원 정리
 - 영상 처리, 시리얼 통신, 패킷 파싱의 모듈별 수동 확인 코드
 - EfficientDet Lite0 객체 검출, 결과 시각화, PAN EMA·히스테리시스·가변 전송 주기 및 실제 서보 추적
-- TILT용 center_y·error_y 및 UP/CENTER/DOWN 판단 (UART·서보 연동은 미구현)
+- TILT center_y·error_y 판단, 전용 UART 전송 및 실제 상하 서보 추적
+- PAN/TILT 독립 명령 상태 관리 및 실제 동시 추적
 
 ## 프로젝트 구조
 
@@ -44,10 +47,12 @@ EmbeddedVisionController/
 │   └── coco_labels.txt          # COCO 클래스 라벨
 ├── scripts/
 │   ├── inspect_model.py         # 모델 입력 텐서 정보 확인
-│   └── test_input.py            # 사람 검출 및 TRACK 시리얼 전송
+│   ├── test_input.py            # 사람 검출 및 PAN/TILT 시리얼 전송
+│   └── test_tilt.py             # 실제 TILT 서보 UP/DOWN 반복 전송
 ├── docs/
 │   ├── 2026-11-18-pan-tracking.md # 환경 변경 및 PAN 실동작 기록
-│   └── 2026-11-23-tracking-stability.md # PAN 안정화 및 TILT 방향 판단
+│   ├── 2026-11-23-tracking-stability.md # PAN 안정화 및 TILT 방향 판단
+│   └── 2026-11-23-pan-tilt-integration.md # TILT 연동 및 동시 추적
 ├── firmware/                   # 현재 비어 있음
 ├── .gitignore
 ├── requirements.txt            # 기본 영상 처리 및 시리얼 통신 의존성
@@ -119,7 +124,7 @@ EmbeddedVisionController/
 5. 점수 `0.5` 이상인 검출의 좌표를 원본 프레임 크기로 변환하고 화면 범위로 제한
 6. 영상에 박스·라벨·점수를 표시하고 결과에 `label`, `score`, `center_x`, `center_y`, `bbox` 저장
 7. 첫 번째 `person`의 가로 중심에 EMA를 적용한 뒤 PAN 방향 판단, 세로 중심으로 TILT 방향 판단
-8. 전송 조건을 만족하면 PAN `TRACK` 명령 전송 (echo 응답 대기 없음)
+8. 각 축의 독립 전송 조건에 따라 TILT 및 PAN TRACK 명령을 같은 UART로 순차 전송 (echo 응답 대기 없음)
 
 PAN 필터는 첫 검출의 중심값으로 초기화하며 이후 `filtered_center_x = 0.4 * center_x + 0.6 * filtered_center_x`로 갱신합니다. 사용자 튜닝에서 alpha 0.3은 반응이 느리고 0.5는 일부 좌우 왕복이 있어 0.4를 기준값으로 선택했습니다.
 
@@ -150,7 +155,7 @@ PAN 오차는 `error_x = filtered_center_x - (frame_width // 2)`입니다. 초�
 
 대상이 사라지면 전송하지 않고 필터·방향·전송 기록을 유지합니다. 재등장한 LEFT/RIGHT는 현재 오차의 간격 조건을 따르며 CENTER가 유지되면 재전송하지 않습니다. 대상 소실 패킷은 없고 여러 사람 중 동일 인물을 유지하는 기능도 없습니다.
 
-TILT는 필터링하지 않은 `center_y`로 `error_y = center_y - (frame_height // 2)`를 계산합니다. -60 미만은 UP, 60 초과는 DOWN, 나머지는 CENTER입니다. 높이 480에서 중심 y=180~300은 CENTER입니다. TILT 방향은 로그로만 확인하며 UART나 서보로 보내지 않습니다.
+TILT는 필터링하지 않은 `center_y`로 `error_y = center_y - (frame_height // 2)`를 계산합니다. -60 미만은 UP, 60 초과는 DOWN, 나머지는 CENTER입니다. 높이 480에서 중심 y=180~300은 CENTER입니다. TILT 방향 변경은 즉시 전송하며, 같은 UP/DOWN은 마지막 TILT 전송으로부터 0.4초 이상 지난 프레임에서 반복합니다. CENTER는 마지막 TILT 전송 방향이 CENTER가 아닐 때 한 번 전송합니다. PAN과 별도 방향·시각 상태를 유지하며 두 축의 명령은 같은 UART에 순차적으로 쓰고 응답은 기다리지 않습니다. TILT에는 아직 EMA·히스테리시스·가변 간격을 적용하지 않았습니다.
 
 기본 실행은 GUI 모드이며 `q` 또는 `Ctrl+C`로 종료합니다. GUI 없이 실행하려면 `--headless`를 지정하고 `Ctrl+C`로 종료합니다. 종료 시 카메라와 시리얼 연결을 정리하며, GUI 모드에서는 OpenCV 창도 정리합니다. `--verbose`를 지정하면 검출 결과가 있을 때 첫 번째 결과를 매 프레임 출력합니다. 이 결과는 TRACK 전송 대상으로 선택한 `person`과 다를 수 있습니다. 선택 대상이 있으면 PAN·TILT 방향과 error_x·error_y도 출력합니다. FPS와 Frame Time은 verbose 여부와 무관하게 매 프레임 출력합니다. 측정 구간은 카메라 읽기부터 추론·후처리·전송까지이며 GUI 표시·waitKey·성능 로그 출력은 포함하지 않습니다. 모델 invoke만의 추론 시간이나 전체 실행 FPS와는 구분해야 합니다. 전처리는 모델 입력 크기를 읽어 사용하지만, RGB `uint8` 입력 및 출력 텐서 순서를 가정하므로 다른 모델로 교체하려면 확인이 필요합니다.
 
@@ -169,13 +174,23 @@ STATE:BRIGHT\n
 STATE:DARK\n
 ```
 
-`scripts/test_input.py`는 사람 방향에 따라 다음 메시지를 보냅니다.
+`scripts/test_input.py`는 PAN 축의 사람 방향에 따라 다음 메시지를 보냅니다.
 
 ```text
 TRACK:LEFT\n
 TRACK:CENTER\n
 TRACK:RIGHT\n
 ```
+
+TILT 축은 별도 명령을 사용합니다.
+
+```text
+TILT:UP\n
+TILT:DOWN\n
+TILT:CENTER\n
+```
+
+두 축의 CENTER는 화면 중앙 부근의 타깃을 따라 현재 위치를 유지하는 의미이며, 기계적 중앙 PWM 값 320으로 복귀하는 명령이 아닙니다.
 
 `create_packet()`은 문자열 타입, 빈 값, 콜론 및 줄바꿈 포함 여부를 검사합니다. `parse_packet()`은 UTF-8 디코딩, 끝의 줄바꿈, 콜론 하나, 비어 있지 않은 명령과 데이터를 확인합니다.
 
@@ -184,17 +199,17 @@ TRACK:RIGHT\n
 | 포트 | `/dev/ttyS0` |
 | 통신 속도 | 115200 baud |
 | 읽기 타임아웃 | 1초 |
-| 수신 방식 | STATE 경로는 전송 후 readline(); TRACK 추적 루프는 응답 대기 없음 |
+| 수신 방식 | STATE 경로는 전송 후 readline(); PAN/TILT 추적 루프는 응답 대기 없음 |
 
 데이터 비트, 패리티, 정지 비트는 코드에서 별도로 지정하지 않습니다. 수신 패킷은 형식만 검사하며, 특정 ACK인지 또는 전송 상태와 일치하는지는 확인하지 않습니다. `protocol.py`의 `TRACK:LEFT`는 파싱 예제이며, 실제 방향 전송은 `scripts/test_input.py`에서 수행합니다.
 
 ## STM32 연동 범위
 
-Python 측에는 외부 장치로 상태를 보내고 응답을 읽는 인터페이스가 있습니다. 장치 측에서 위 메시지를 수신·해석해야 합니다. 응답을 읽는 STATE 경로에서는 LF로 끝나는 `COMMAND:PAYLOAD`가 필요하지만, 현재 TRACK 추적 루프는 echo 응답을 기다리지 않습니다.
+Python 측에는 외부 장치로 상태를 보내고 응답을 읽는 인터페이스가 있습니다. 장치 측에서 위 메시지를 수신·해석해야 합니다. 응답을 읽는 STATE 경로에서는 LF로 끝나는 `COMMAND:PAYLOAD`가 필요하지만, 현재 PAN/TILT 추적 루프는 echo 응답을 기다리지 않습니다.
 
-사용자 확인 구성은 NUCLEO-F401RE → PCA9685 → SG90 PAN/TILT입니다. Windows COM 포트를 VMware Serial Port로 연결해 Ubuntu `/dev/ttyS0`에서 통신하며, UART 송수신 및 PAN 사람 추적을 실제로 확인했습니다. `TRACK:CENTER`는 현재 PAN 위치 유지이며 중앙 각도로 복귀하는 명령이 아닙니다.
+사용자 확인 구성은 NUCLEO-F401RE → PCA9685 → SG90 PAN/TILT입니다. Windows COM 포트를 VMware Serial Port로 연결해 Ubuntu `/dev/ttyS0`에서 통신하며, UART 송수신 및 PAN/TILT 동시 사람 추적을 실제로 확인했습니다. `TRACK:CENTER`는 현재 PAN 위치 유지이며 중앙 각도로 복귀하는 명령이 아닙니다.
 
-STM32 펌웨어와 상세 핀·배선은 저장소에 포함되어 있지 않습니다. 보정값과 연결 기록은 [작업 기록](docs/2026-11-18-pan-tracking.md)을 참고하세요. TILT 보정 및 영상 기반 방향 판단은 완료했으며, TILT UART·서보 연동은 미구현입니다.
+STM32 펌웨어와 상세 핀·배선은 저장소에 포함되어 있지 않습니다. 보정값과 연결 기록은 [작업 기록](docs/2026-11-18-pan-tracking.md)을 참고하세요. 사용자 검증 구성은 PAN 채널 0, TILT 채널 1이며 보드 초기화 시 두 축을 각각 320으로 설정합니다. STM32에서 TILT 물리 방향을 보정해 UP은 실제 위쪽, DOWN은 아래쪽으로 이동합니다. UART·실제 TILT 제어까지 확인했고 안정화 튜닝은 다음 단계입니다.
 
 ## 설치 및 실행
 
@@ -296,7 +311,7 @@ python3 -m scripts.test_input --headless --verbose
 
 `scripts.inspect_model`은 출력 텐서 정보도 조회하지만 콘솔에는 입력 텐서 정보만 출력합니다. 2026-10-06 로컬 `.venv`에서 모델 로드·텐서 할당 및 합성 이미지 추론을 확인했습니다. Python 소스 문법과 `STATE` 패킷 생성·파싱 왕복 검사도 통과했습니다. 카메라 객체 검출 및 실제 시리얼 통신 실행은 이번 확인에 포함되지 않았습니다.
 
-`scripts/test_input.py --headless` 실행에는 카메라와 `/dev/ttyS0`에 연결된 외부 장치와 포트 접근 권한이 필요합니다. 현재 TRACK 추적 루프는 응답을 기다리지 않습니다. 시리얼 연결·쓰기 오류가 발생하면 예외를 출력하고 종료합니다. 별도의 STATE 실행 경로는 여전히 1초 읽기 타임아웃을 사용합니다. `scripts.inspect_model`은 카메라와 시리얼 장치 없이 실행할 수 있습니다. 모델 로드와 라벨 파일 읽기는 카메라 처리의 `try` 블록 이전에 이루어지므로, 의존성이나 파일 경로 오류는 해당 블록에서 처리되지 않습니다.
+`scripts/test_input.py --headless` 실행에는 카메라와 `/dev/ttyS0`에 연결된 외부 장치와 포트 접근 권한이 필요합니다. 현재 PAN/TILT 추적 루프는 응답을 기다리지 않습니다. 시리얼 연결·쓰기 오류가 발생하면 예외를 출력하고 종료합니다. 별도의 STATE 실행 경로는 여전히 1초 읽기 타임아웃을 사용합니다. `scripts.inspect_model`은 카메라와 시리얼 장치 없이 실행할 수 있습니다. 모델 로드와 라벨 파일 읽기는 카메라 처리의 `try` 블록 이전에 이루어지므로, 의존성이나 파일 경로 오류는 해당 블록에서 처리되지 않습니다.
 
 ## Troubleshooting
 
@@ -315,8 +330,8 @@ python3 -m scripts.test_input --headless --verbose
 - 상태 전송 직후 이전 상태를 갱신하며, 상대 장치의 처리 성공을 확인하지 않습니다.
 - LEFT/RIGHT의 주기적 반복 전송은 있지만, 통신 실패에 대한 재시도, 상시 수신, 자동 재연결, 체크섬은 구현되어 있지 않습니다.
 - 객체 검출과 딥러닝 추론은 별도 스크립트에 구현되어 있으며, 방향 판단 및 시리얼 전송도 연결되어 있습니다. 밝기 메인과의 통합 및 동일 인물 추적은 구현되어 있지 않습니다.
-- PAN 튜닝 후 중앙 부근 왕복과 과이동 감소를 사용자가 확인했습니다. TILT 방향 판단은 완료했으나 실제 TILT 추적 제어는 다음 단계입니다.
-- 사용자 관찰 루프 성능은 약 4.3~5.0 FPS이며 모델 단독 벤치마크나 검출 정확도 평가는 아닙니다.
+- PAN 튜닝 후 중앙 부근 왕복·과이동 감소와 PAN/TILT 동시 제어를 사용자가 확인했습니다. TILT 안정화는 다음 단계이며 첫 STEP의 움직임이 미미한 현상은 원인을 확정하지 않았습니다.
+- 사용자 관찰 PAN/TILT 동시 루프 성능은 약 4.5~5.0 FPS, 약 200~220ms/frame이며 모델 단독 벤치마크나 검출 정확도 평가는 아닙니다.
 - `app/main.py`는 import 시에도 실행 로직이 시작됩니다.
 
 ### 2026-10-13 확인 결과
@@ -337,3 +352,11 @@ python3 -m unittest discover -s tests -v
 검사 범위는 실제 모델의 합성 이미지 추론, RGB 전처리, 검출 필터·좌표 제한, 방향 히스테리시스 경계, 대상 선택, 반복 전송·CENTER 억제, GUI/headless 및 종료 정리의 모의 실행, 시리얼 패킷·응답 예외, 밝기 판단입니다. 이 자동화 검사는 실제 카메라·STM32를 제어하지 않습니다.
 
 `tests/`는 사용자 요청에 따라 `.gitignore`에 등록하고 기존 파일의 Git 추적도 해제했습니다. 테스트 파일은 로컬에만 존재하므로 clone한 저장소에서는 별도로 준비해야 합니다.
+
+### TILT 단독 하드웨어 확인
+
+```bash
+python3 -m scripts.test_tilt
+```
+
+이 명령은 실제 서보를 움직입니다. UP을 0.3초 간격으로 4회 보내고 1초 대기 후 DOWN을 0.3초 간격으로 4회 보냅니다. STEP은 사용자 STM32 설정에서 5이며, 테스트는 응답을 읽지 않습니다. 테스트 후 기계적 중앙으로 복귀시키는 명령은 없습니다.

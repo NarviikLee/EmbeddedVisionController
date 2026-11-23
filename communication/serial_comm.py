@@ -33,7 +33,9 @@ def send_track(ser, direction):
 	sent_bytes = ser.write(packet)
 	return sent_bytes
 
-
+def send_tilt(ser, direction):
+    packet = create_packet("TILT", direction)
+    return ser.write(packet)
 
 if __name__ == '__main__':	
 	try:

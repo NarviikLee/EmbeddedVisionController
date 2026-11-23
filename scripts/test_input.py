@@ -13,6 +13,7 @@ from vision.detector import (
 from communication.serial_comm import (
     connect_serial,
     send_track,
+    send_tilt,
     receive_packet,
 )
 
@@ -44,6 +45,9 @@ if __name__ == '__main__':
     ser = None
     last_sent_direction = None
     last_move_time = 0.0
+    last_sent_tilt_direction = None
+    last_tilt_move_time = 0.0
+
     alpha_x = 0.4
     filtered_center_x = None
     filtered_center_y = None
@@ -119,7 +123,25 @@ if __name__ == '__main__':
                     )
 
                 now = time.monotonic()
+                should_send_tilt = False
 
+                if tilt_direction == "CENTER":
+                    if last_sent_tilt_direction != "CENTER":
+                        should_send_tilt = True
+                else:
+                    if tilt_direction != last_sent_tilt_direction:
+                        should_send_tilt = True
+                    elif now - last_tilt_move_time >= 0.4:
+                        should_send_tilt = True
+
+                if should_send_tilt:
+                    send_tilt(ser, tilt_direction)
+
+                    if args.verbose:
+                        print(f"TX TILT -> {tilt_direction}")
+
+                    last_sent_tilt_direction = tilt_direction
+                    last_tilt_move_time = now
                 # 히스테리시스 상태는 매 프레임 갱신
                 previous_direction = direction
                 abs_error = abs(error_x)
