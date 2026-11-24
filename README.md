@@ -2,20 +2,19 @@
 
 OpenCV로 카메라 영상의 밝기를 분석하고, 밝기 상태가 바뀌면 시리얼 포트로 외부 장치에 전달하는 Python 프로젝트입니다. 중앙 영역의 평균 밝기에 이동평균과 히스테리시스를 적용해 `BRIGHT` 또는 `DARK` 상태를 판단합니다.
 
-현재는 VMware Ubuntu 20.04에서 UVC 카메라의 사람 검출 결과를 UART로 NUCLEO-F401RE에 전달하고, PCA9685와 SG90 서보를 통해 PAN 좌우 추적을 수행합니다. 밝기 분석 기능도 별도 실행 경로로 유지합니다.
+현재는 VMware Ubuntu 20.04에서 UVC 카메라의 사람 검출 결과를 UART로 NUCLEO-F401RE에 전달하고, PCA9685와 SG90 서보를 통해 PAN 좌우·TILT 상하 추적을 수행합니다. 밝기 분석 기능도 별도 실행 경로로 유지합니다.
 
-## 최근 업데이트 (2026-11-23)
+## 최근 업데이트 (2026-11-24)
 
-- PAN 중심값에 EMA (`alpha_x = 0.4`)를 적용하고 실행 루프의 히스테리시스 기준을 복귀 60 / 이탈 85픽셀로 확대
-- 가로 오차 크기에 따라 반복 명령 간격을 0.20~0.50초로 조절해 중앙 부근의 과이동·좌우 왕복 감소
-- 추적 루프의 UART echo/ACK 대기를 제거해 명령 전송 중에도 사용자 측정 약 4~5 FPS 유지
-- VMware Serial Port의 Connected 설정 문제를 해결해 `/dev/ttyS0` 통신 복구
-- TILT 전용 UART 송신과 독립 전송 상태 추가: UP/DOWN 반복 간격 0.4초, CENTER 진입 시 한 번 전송
-- 사용자 STM32 파서·물리 방향 매핑 수정 후 PAN/TILT 실제 동시 추적 확인
-- `scripts/test_tilt.py` 추가: UP/DOWN 각 4회 반복 전송으로 하드웨어 이동 확인
-- 프레임 읽기 성공 확인 후 영상 180도 보정을 수행하도록 순서 수정
+- `find_target()`이 person 후보 중 가장 높은 score의 객체를 선택하도록 변경
+- TILT에도 EMA (`alpha_y = 0.4`)와 히스테리시스 (복귀 45 / 이탈 70픽셀) 적용
+- PAN/TILT 방향 함수·상태·오차·전송 변수를 축별로 분리
+- 후처리 기본 score threshold를 `0.5`로 명시하고 class ID 범위 검사 및 불필요한 주석 정리
+- PAN 설정과 TILT STEP=5·반복 간격 0.4초 유지
 
-PAN과 TILT 모두 Vision 기반 실제 서보 추적을 확인했습니다. 다음 단계는 PAN 설정을 유지하며 TILT STEP·dead zone·필터·반복 간격을 튜닝하는 것입니다. 하드웨어 관찰과 성능 수치는 사용자 제공 결과입니다. [PAN 안정화 기록](docs/2026-11-23-tracking-stability.md), [PAN/TILT 통합 기록](docs/2026-11-23-pan-tilt-integration.md)과 [이전 구성 기록](docs/2026-11-18-pan-tracking.md)을 참고하세요.
+사용자는 실제 사람 추적에서 약 4.9~5.0 FPS / 198~205ms/frame과 TILT 필터 중심값의 완만한 변화·CENTER 유지를 확인했습니다. 근거리에서 사람 박스가 화면 높이 대부분을 차지해 TILT 평가에는 한계가 있으며, 더 먼 거리에서 추가 튜닝할 예정입니다. 나무판·3M 듀얼락 베이스 고정은 아직 계획입니다.
+
+[오늘 작업 기록](docs/2026-11-24-tracking-stability.md), [PAN/TILT 통합 기록](docs/2026-11-23-pan-tilt-integration.md), [UART·PAN 안정화 기록](docs/2026-11-23-tracking-stability.md), [초기 구성 기록](docs/2026-11-18-pan-tracking.md)을 참고하세요. 하드웨어 결과는 사용자 확인 기록이며 이번 문서 점검에서 재시험하지 않았습니다.
 
 ## 구현된 기능
 
@@ -27,7 +26,8 @@ PAN과 TILT 모두 Vision 기반 실제 서보 추적을 확인했습니다. 다
 - 카메라 화면 표시, `q` 키 종료 및 자원 정리
 - 영상 처리, 시리얼 통신, 패킷 파싱의 모듈별 수동 확인 코드
 - EfficientDet Lite0 객체 검출, 결과 시각화, PAN EMA·히스테리시스·가변 전송 주기 및 실제 서보 추적
-- TILT center_y·error_y 판단, 전용 UART 전송 및 실제 상하 서보 추적
+- TILT 중심값 EMA·히스테리시스 방향 판단, 전용 UART 전송 및 실제 상하 서보 추적
+- person 후보 중 최고 confidence score 기반 타깃 선택, class ID 범위 검사
 - PAN/TILT 독립 명령 상태 관리 및 실제 동시 추적
 
 ## 프로젝트 구조
@@ -52,7 +52,8 @@ EmbeddedVisionController/
 ├── docs/
 │   ├── 2026-11-18-pan-tracking.md # 환경 변경 및 PAN 실동작 기록
 │   ├── 2026-11-23-tracking-stability.md # PAN 안정화 및 TILT 방향 판단
-│   └── 2026-11-23-pan-tilt-integration.md # TILT 연동 및 동시 추적
+│   ├── 2026-11-23-pan-tilt-integration.md # TILT 연동 및 동시 추적
+│   └── 2026-11-24-tracking-stability.md # 최고 score 선택 및 TILT 안정화
 ├── firmware/                   # 현재 비어 있음
 ├── .gitignore
 ├── requirements.txt            # 기본 영상 처리 및 시리얼 통신 의존성
@@ -123,12 +124,14 @@ EmbeddedVisionController/
 4. 출력 텐서를 박스, 클래스, 점수, 검출 개수 순으로 읽기
 5. 점수 `0.5` 이상인 검출의 좌표를 원본 프레임 크기로 변환하고 화면 범위로 제한
 6. 영상에 박스·라벨·점수를 표시하고 결과에 `label`, `score`, `center_x`, `center_y`, `bbox` 저장
-7. 첫 번째 `person`의 가로 중심에 EMA를 적용한 뒤 PAN 방향 판단, 세로 중심으로 TILT 방향 판단
-8. 각 축의 독립 전송 조건에 따라 TILT 및 PAN TRACK 명령을 같은 UART로 순차 전송 (echo 응답 대기 없음)
+7. `find_target()`으로 최고 score의 `person`을 선택하고, 가로·세로 중심에 각각 EMA 적용 후 PAN/TILT 방향 판단
+8. 각 축의 독립 전송 조건에 따라 PAN TRACK 및 TILT 명령을 같은 UART로 순차 전송 (echo 응답 대기 없음)
+
+`postprocess_detections()`의 기본 score threshold는 `DEFAULT_SCORE_THRESHOLD = 0.5`이며 호출 시 변경할 수 있습니다. `0 <= class_id < len(labels)`인 검출만 결과에 포함합니다. `find_target()`은 지정 라벨(기본 person) 후보가 없으면 None, 있으면 score 최댓값을 반환합니다. 동점이면 후보 중 먼저 나온 객체를 선택합니다. confidence 우선 선택은 오검출 위험을 줄이려는 개선이며 오검출 제거나 동일 인물 유지를 보장하지 않습니다.
 
 PAN 필터는 첫 검출의 중심값으로 초기화하며 이후 `filtered_center_x = 0.4 * center_x + 0.6 * filtered_center_x`로 갱신합니다. 사용자 튜닝에서 alpha 0.3은 반응이 느리고 0.5는 일부 좌우 왕복이 있어 0.4를 기준값으로 선택했습니다.
 
-PAN 오차는 `error_x = filtered_center_x - (frame_width // 2)`입니다. 초기 방향은 CENTER이며 실행 루프는 아래 기준을 명시적으로 전달합니다. `vision/detector.py` 함수 기본값 50/70과는 구분됩니다.
+PAN 오차는 `error_x = filtered_center_x - (frame_width // 2)`입니다. 초기 방향은 CENTER이며 실행 루프는 아래 기준을 명시적으로 전달합니다. `vision/detector.py` `determine_pan_direction()` 기본값 50/70과는 구분됩니다.
 
 | 이전 방향 | 조건 | 새 방향 |
 |---|---|---|
@@ -153,11 +156,23 @@ PAN 오차는 `error_x = filtered_center_x - (frame_width // 2)`입니다. 초�
 
 이는 고정 주기를 보장하는 타이머가 아니며 프레임 처리 속도의 영향을 받습니다. 방향은 검출 프레임마다, 마지막 전송 방향·시각은 `send_track()` 반환 후 갱신합니다. STM32 echo는 유지하지만 현재 루프는 읽지 않으며, 실제 처리 성공이나 ACK 의미를 검사하지 않습니다. 응답 대기 제거는 비동기 UART 구현을 의미하지 않으며 `serial.write()`는 동기 호출입니다.
 
-대상이 사라지면 전송하지 않고 필터·방향·전송 기록을 유지합니다. 재등장한 LEFT/RIGHT는 현재 오차의 간격 조건을 따르며 CENTER가 유지되면 재전송하지 않습니다. 대상 소실 패킷은 없고 여러 사람 중 동일 인물을 유지하는 기능도 없습니다.
+대상이 사라지면 전송하지 않고 양 축의 필터·방향·전송 기록을 유지합니다. 최고 score 대상이 바뀌어도 EMA를 초기화하지 않으므로 이전 대상 위치가 섞일 수 있습니다. 재등장한 LEFT/RIGHT는 현재 오차의 간격 조건을 따르며 CENTER가 유지되면 재전송하지 않습니다. 대상 소실 패킷은 없고 여러 사람 중 동일 인물을 유지하는 기능도 없습니다.
 
-TILT는 필터링하지 않은 `center_y`로 `error_y = center_y - (frame_height // 2)`를 계산합니다. -60 미만은 UP, 60 초과는 DOWN, 나머지는 CENTER입니다. 높이 480에서 중심 y=180~300은 CENTER입니다. TILT 방향 변경은 즉시 전송하며, 같은 UP/DOWN은 마지막 TILT 전송으로부터 0.4초 이상 지난 프레임에서 반복합니다. CENTER는 마지막 TILT 전송 방향이 CENTER가 아닐 때 한 번 전송합니다. PAN과 별도 방향·시각 상태를 유지하며 두 축의 명령은 같은 UART에 순차적으로 쓰고 응답은 기다리지 않습니다. TILT에는 아직 EMA·히스테리시스·가변 간격을 적용하지 않았습니다.
+TILT도 첫 중심값으로 필터를 초기화하고 이후 `filtered_center_y = 0.4 * raw_center_y + 0.6 * filtered_center_y`를 적용합니다. `determine_tilt_direction()`은 필터 중심과 이전 TILT 방향을 받아 `(tilt_direction, tilt_error)`를 반환합니다. 오차는 `filtered_center_y - (frame_height // 2)`이며 초기 방향은 CENTER입니다.
 
-기본 실행은 GUI 모드이며 `q` 또는 `Ctrl+C`로 종료합니다. GUI 없이 실행하려면 `--headless`를 지정하고 `Ctrl+C`로 종료합니다. 종료 시 카메라와 시리얼 연결을 정리하며, GUI 모드에서는 OpenCV 창도 정리합니다. `--verbose`를 지정하면 검출 결과가 있을 때 첫 번째 결과를 매 프레임 출력합니다. 이 결과는 TRACK 전송 대상으로 선택한 `person`과 다를 수 있습니다. 선택 대상이 있으면 PAN·TILT 방향과 error_x·error_y도 출력합니다. FPS와 Frame Time은 verbose 여부와 무관하게 매 프레임 출력합니다. 측정 구간은 카메라 읽기부터 추론·후처리·전송까지이며 GUI 표시·waitKey·성능 로그 출력은 포함하지 않습니다. 모델 invoke만의 추론 시간이나 전체 실행 FPS와는 구분해야 합니다. 전처리는 모델 입력 크기를 읽어 사용하지만, RGB `uint8` 입력 및 출력 텐서 순서를 가정하므로 다른 모델로 교체하려면 확인이 필요합니다.
+| 이전 TILT 방향 | 조건 | 새 방향 |
+|---|---|---|
+| CENTER | 오차 < -70 | UP |
+| CENTER | 오차 > 70 | DOWN |
+| CENTER | -70 ≤ 오차 ≤ 70 | CENTER |
+| UP | 오차 ≥ -45 | CENTER |
+| UP | 오차 < -45 | UP |
+| DOWN | 오차 ≤ 45 | CENTER |
+| DOWN | 오차 > 45 | DOWN |
+
+높이 480에서 CENTER는 필터 중심 y=170~310을 유지하고, UP은 y≥195, DOWN은 y≤285에서 CENTER로 돌아옵니다. TILT 방향 변경은 즉시 전송하며 같은 UP/DOWN은 0.4초 이상 경과 시 반복합니다. CENTER는 진입 시 한 번 전송합니다. PAN/TILT는 이전 방향·마지막 전송 방향·시각을 독립 관리하며 TILT 가변 간격은 아직 없습니다. 사용자 STM32 설정 TILT_STEP은 5로 유지합니다.
+
+기본 실행은 GUI 모드이며 `q` 또는 `Ctrl+C`로 종료합니다. GUI 없이 실행하려면 `--headless`를 지정하고 `Ctrl+C`로 종료합니다. 종료 시 카메라와 시리얼 연결을 정리하며, GUI 모드에서는 OpenCV 창도 정리합니다. `--verbose`를 지정하면 검출 결과가 있을 때 첫 번째 결과를 매 프레임 출력합니다. 이 결과는 TRACK 전송 대상으로 선택한 `person`과 다를 수 있습니다. 선택 대상이 있으면 각 축의 방향, raw·filtered 중심값 및 error_x·error_y도 출력합니다. FPS와 Frame Time은 verbose 여부와 무관하게 매 프레임 출력합니다. 측정 구간은 카메라 읽기부터 추론·후처리·전송까지이며 GUI 표시·waitKey·성능 로그 출력은 포함하지 않습니다. 모델 invoke만의 추론 시간이나 전체 실행 FPS와는 구분해야 합니다. 전처리는 모델 입력 크기를 읽어 사용하지만, RGB `uint8` 입력 및 출력 텐서 순서를 가정하므로 다른 모델로 교체하려면 확인이 필요합니다.
 
 ## 시리얼 통신 프로토콜
 
@@ -330,8 +345,8 @@ python3 -m scripts.test_input --headless --verbose
 - 상태 전송 직후 이전 상태를 갱신하며, 상대 장치의 처리 성공을 확인하지 않습니다.
 - LEFT/RIGHT의 주기적 반복 전송은 있지만, 통신 실패에 대한 재시도, 상시 수신, 자동 재연결, 체크섬은 구현되어 있지 않습니다.
 - 객체 검출과 딥러닝 추론은 별도 스크립트에 구현되어 있으며, 방향 판단 및 시리얼 전송도 연결되어 있습니다. 밝기 메인과의 통합 및 동일 인물 추적은 구현되어 있지 않습니다.
-- PAN 튜닝 후 중앙 부근 왕복·과이동 감소와 PAN/TILT 동시 제어를 사용자가 확인했습니다. TILT 안정화는 다음 단계이며 첫 STEP의 움직임이 미미한 현상은 원인을 확정하지 않았습니다.
-- 사용자 관찰 PAN/TILT 동시 루프 성능은 약 4.5~5.0 FPS, 약 200~220ms/frame이며 모델 단독 벤치마크나 검출 정확도 평가는 아닙니다.
+- PAN 튜닝 후 중앙 부근 왕복·과이동 감소와 PAN/TILT 동시 제어를 사용자가 확인했습니다. TILT EMA·히스테리시스 적용 후 중앙 유지가 관찰됐습니다. 근거리 테스트는 bbox 높이가 프레임 대부분을 차지해 중심 y가 중앙 근처에 고정될 수 있으므로, 현재 값을 유지하고 더 먼 거리에서 평가할 예정입니다. 첫 STEP의 움직임이 미미한 현상은 원인을 확정하지 않았습니다.
+- 2026-11-24 사용자 관찰 PAN/TILT 루프 성능은 약 4.9~5.0 FPS, 약 198~205ms/frame이며 모델 단독 벤치마크나 검출 정확도 평가는 아닙니다.
 - `app/main.py`는 import 시에도 실행 로직이 시작됩니다.
 
 ### 2026-10-13 확인 결과
@@ -341,9 +356,9 @@ python3 -m scripts.test_input --headless --verbose
 추가 변경 확인: Python `3.10.12`, NumPy `1.26.4`, OpenCV `4.9.0`, `ai-edge-litert` `2.3.0` 환경에서 변경된 두 Python 파일의 문법과 합성 이미지 추론·후처리를 확인했습니다. 대체 런타임이 실제로 선택되었으며, 카메라·GUI·시리얼 통신 및 `Ctrl+C` 자원 정리는 실행 검증하지 않았습니다.
 
 
-### 현재 로컬 자동화 테스트
+### 로컬 자동화 테스트 상태
 
-2026-11-18에는 로컬 테스트 9개가 통과했습니다. 2026-11-23 현재 실행 결과는 7개 통과, 2개 실패, 테스트 모듈 로드 오류 1개입니다. 실행 흐름 테스트는 모의 결과에 center_y가 없으며 EMA·가변 간격·응답 대기 제거도 반영해야 합니다. test_serial.py는 import 시 실제 /dev/ttyS0을 열어 현재 검사 환경에서 로드에 실패했습니다. 이번에는 테스트 파일을 수정하지 않았습니다.
+2026-11-18에는 로컬 테스트 9개가 통과했습니다. 2026-11-23 실행 결과는 7개 통과, 2개 실패, 테스트 모듈 로드 오류 1개입니다. 실행 흐름 테스트는 모의 결과에 center_y가 없으며 EMA·가변 간격·응답 대기 제거도 반영해야 합니다. test_serial.py는 import 시 실제 /dev/ttyS0을 열어 현재 검사 환경에서 로드에 실패했습니다. 이 수치는 이전 코드 기준입니다. 2026-11-24의 함수명 변경·최고 score 선택·TILT 필터를 반영해 로컬 테스트를 갱신해야 합니다. 이번 문서 작업에서는 테스트 파일을 수정하지 않았습니다.
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -360,3 +375,9 @@ python3 -m scripts.test_tilt
 ```
 
 이 명령은 실제 서보를 움직입니다. UP을 0.3초 간격으로 4회 보내고 1초 대기 후 DOWN을 0.3초 간격으로 4회 보냅니다. STEP은 사용자 STM32 설정에서 5이며, 테스트는 응답을 읽지 않습니다. 테스트 후 기계적 중앙으로 복귀시키는 명령은 없습니다.
+
+### 하드웨어 테스트 개선 계획
+
+나무판 베이스 위에 팬틸트 킷을 3M 듀얼락으로 고정해 베이스 이동·흔들림을 줄이고 탈부착을 쉽게 유지할 예정입니다. 아직 설치 완료나 효과 검증으로 기록하지 않습니다. 현재 alpha_x/y=0.4, PAN dead zone 60/85, TILT dead zone 45/70, TILT_STEP=5 및 TILT 간격 0.4초는 유지하며 더 먼 거리에서 평가한 뒤 추가 튜닝합니다.
+
+2026-11-24 문서 대조 과정에서 Python 문법, 최고 score 타깃 선택, PAN/TILT 경계값, 후처리 class ID 범위·score 필터를 하드웨어 없이 확인했습니다. 해당 검사는 통과했으며 전체 GUI·UART 통합 테스트나 실제 장치 재검증은 포함하지 않습니다.
