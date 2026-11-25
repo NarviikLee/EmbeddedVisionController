@@ -51,3 +51,22 @@ if __name__ == '__main__':
 	finally:
 		if ser is not None:
 			ser.close()
+
+
+def send_move(ser, pan_direction, tilt_direction):
+    valid_pan = {"LEFT", "CENTER", "RIGHT", "HOLD"}
+    valid_tilt = {"UP", "CENTER", "DOWN", "HOLD"}
+
+    if pan_direction not in valid_pan:
+        raise ValueError(f"Invalid PAN direction: {pan_direction}")
+
+    if tilt_direction not in valid_tilt:
+        raise ValueError(f"Invalid TILT direction: {tilt_direction}")
+
+    if pan_direction == "HOLD" and tilt_direction == "HOLD":
+        return 0
+
+    payload = f"{pan_direction},{tilt_direction}"
+    packet = create_packet("MOVE", payload)
+
+    return ser.write(packet)

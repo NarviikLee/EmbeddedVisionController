@@ -16,6 +16,7 @@ from communication.serial_comm import (
     connect_serial,
     send_track,
     send_tilt,
+    send_move
 )
 
 
@@ -78,6 +79,12 @@ if __name__ == "__main__":
     filtered_center_x = None
     filtered_center_y = None
 
+
+    # 객체를 찾지 못했을 때
+    TARGET_LOST_TIMEOUT = 1.0
+
+    last_target_seen_time = None
+    target_lost = False
     try:
         cap = cv2.VideoCapture(0)
         ser = connect_serial()
@@ -125,9 +132,16 @@ if __name__ == "__main__":
             target = find_target(results)
 
             if target is not None:
-
+                last_target_seen_time = time.monotonic()
+                target_lost = False
                 raw_center_x = target["center_x"]
                 raw_center_y = target["center_y"]
+                xmin, ymin, xmax, ymax = target["bbox"]
+
+                # TILT용 상체 기준점 (bbox 상단 35%)
+                tilt_target_y = int(
+                    ymin + (ymax - ymin) * 0.35
+                )
 
                 frame_width = frame.shape[1]
                 frame_height = frame.shape[0]
@@ -147,16 +161,23 @@ if __name__ == "__main__":
                 # TILT EMA
                 # -------------------------
                 if filtered_center_y is None:
-                    filtered_center_y = float(raw_center_y)
+                    filtered_center_y = float(tilt_target_y)
                 else:
+                    # filtered_center_y = (
+                    #     alpha_y * raw_center_y
+                    #     + (1 - alpha_y) * filtered_center_y
+                    # )
                     filtered_center_y = (
-                        alpha_y * raw_center_y
-                        + (1 - alpha_y) * filtered_center_y
-                    )
-
+                            alpha_y * tilt_target_y
+                            + (1 - alpha_y) * filtered_center_y
+                        )
                 # -------------------------
                 # PAN 방향 판단
                 # -------------------------
+                bbox_height = ymax - ymin
+                bbox_ratio = bbox_height / frame_height
+
+
                 pan_direction, pan_error = determine_pan_direction(
                     filtered_center_x,
                     frame_width,
@@ -181,12 +202,9 @@ if __name__ == "__main__":
 
                 if args.verbose:
                     print(
-                        f"PAN={pan_direction}, "
-                        f"raw_x={raw_center_x}, "
-                        f"filtered_x={filtered_center_x:.1f}, "
-                        f"error_x={pan_error:.1f} | "
                         f"TILT={tilt_direction}, "
-                        f"raw_y={raw_center_y}, "
+                        f"bbox_center_y={raw_center_y}, "
+                        f"target_y={tilt_target_y}, "
                         f"filtered_y={filtered_center_y:.1f}, "
                         f"error_y={tilt_error:.1f}"
                     )
@@ -224,21 +242,15 @@ if __name__ == "__main__":
                         >= pan_move_interval
                     ):
                         should_send_pan = True
-
-                if should_send_pan:
-
-                    send_track(
-                        ser,
-                        pan_direction
-                    )
-
-                    if args.verbose:
-                        print(
-                            f"TX PAN -> {pan_direction}"
-                        )
-
-                    last_sent_pan_direction = pan_direction
-                    last_pan_move_time = now
+                abs_tilt_error = abs(tilt_error)
+                if abs_tilt_error > 150:
+                    tilt_move_interval = 0.30
+                elif abs_tilt_error > 100:
+                    tilt_move_interval = 0.40
+                elif abs_tilt_error > 70:
+                    tilt_move_interval = 0.50
+                else:
+                    tilt_move_interval = 0.60
 
                 # =========================
                 # TILT 전송
@@ -257,24 +269,107 @@ if __name__ == "__main__":
 
                     elif (
                         now - last_tilt_move_time
-                        >= 0.4
+                        >= tilt_move_interval
                     ):
                         should_send_tilt = True
+                # =========================
+                # PAN / TILT 통합 UART 전송
+                # =========================
+                frame_center_y = frame_height // 2
 
-                if should_send_tilt:
+                # UP/DOWN 시작 기준
+                up_exit_line = frame_center_y - 70
+                down_exit_line = frame_center_y + 70
 
-                    send_tilt(
+                # UP/DOWN 종료 기준
+                up_enter_line = frame_center_y - 45
+                down_enter_line = frame_center_y + 45
+
+                # 화면 중앙선
+                cv2.line(res, (0, frame_center_y), (frame_width, frame_center_y),
+                         (255, 255, 255), 1)
+
+                # 시작 기준선 (빨강)
+                cv2.line(res, (0, up_exit_line), (frame_width, up_exit_line),
+                         (0, 0, 255), 2)
+                cv2.line(res, (0, down_exit_line), (frame_width, down_exit_line),
+                         (0, 0, 255), 2)
+
+                # 종료 기준선 (노랑)
+                cv2.line(res, (0, up_enter_line), (frame_width, up_enter_line),
+                         (0, 255, 255), 1)
+                cv2.line(res, (0, down_enter_line), (frame_width, down_enter_line),
+                         (0, 255, 255), 1)
+
+                # Bounding Box 중앙점 (파랑)
+                cv2.circle(
+                    res,
+                    (raw_center_x, raw_center_y),
+                    6,
+                    (255, 0, 0),
+                    -1
+                )
+
+                # TILT 목표점 (초록)
+                cv2.circle(
+                    res,
+                    (raw_center_x, tilt_target_y),
+                    6,
+                    (0, 255, 0),
+                    -1
+                )
+
+                # EMA 적용된 실제 판단점 (자홍)
+                cv2.circle(
+                    res,
+                    (raw_center_x, int(filtered_center_y)),
+                    5,
+                    (255, 0, 255),
+                    -1
+                )
+                if should_send_pan or should_send_tilt:
+
+                    pan_command = (
+                        pan_direction if should_send_pan else "HOLD"
+                    )
+
+                    tilt_command = (
+                        tilt_direction if should_send_tilt else "HOLD"
+                    )
+
+                    sent_bytes = send_move(
                         ser,
-                        tilt_direction
+                        pan_command,
+                        tilt_command,
                     )
 
                     if args.verbose:
                         print(
-                            f"TX TILT -> {tilt_direction}"
+                            f"TX MOVE -> {pan_command},{tilt_command} "
+                            f"({sent_bytes} bytes)"
                         )
 
-                    last_sent_tilt_direction = tilt_direction
-                    last_tilt_move_time = now
+                    # 실제 전송 대상인 축만 기록 갱신
+                    if should_send_pan:
+                        last_sent_pan_direction = pan_direction
+                        last_pan_move_time = now
+
+                    if should_send_tilt:
+                        last_sent_tilt_direction = tilt_direction
+                        last_tilt_move_time = now
+            elif (not target_lost and last_target_seen_time is not None and time.monotonic() - last_target_seen_time >= TARGET_LOST_TIMEOUT):
+                target_lost = True
+                
+                filtered_center_x = None
+                filtered_center_y = None
+
+                previous_pan_direction = "CENTER"
+                previous_tilt_direction = "CENTER"
+
+                last_sent_pan_direction = None
+                last_sent_tilt_direction = None
+
+                print("[INFO] Target lost for 1 second")
 
             elapsed = time.monotonic() - start_time
 
@@ -310,16 +405,14 @@ if __name__ == "__main__":
         )
 
     finally:
-
-        print(
-            "[INFO] Releasing camera..."
-        )
+        print("[INFO] Cleaning up...")
+        if ser is not None and ser.is_open:
+            ser.close()
+            print("[INFO] Serial port closed")
 
         if cap is not None:
             cap.release()
-
-        if ser is not None:
-            ser.close()
+            print("[INFO] Camera released")
 
         if not args.headless:
             cv2.destroyAllWindows()
