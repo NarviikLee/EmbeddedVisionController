@@ -92,7 +92,7 @@ if __name__ == "__main__":
         if not cap.isOpened():
             print("Camera Open Failed")
             exit()
-
+        last_fps_log_time = time.monotonic()
         while True:
             start_time = time.monotonic()
 
@@ -343,11 +343,11 @@ if __name__ == "__main__":
                         tilt_command,
                     )
 
-                    if args.verbose:
-                        print(
-                            f"TX MOVE -> {pan_command},{tilt_command} "
-                            f"({sent_bytes} bytes)"
-                        )
+                    # if args.verbose:
+                    print(
+                        f"TX MOVE -> {pan_command},{tilt_command} "
+                        f"({sent_bytes} bytes)"
+                    )
 
                     # 실제 전송 대상인 축만 기록 갱신
                     if should_send_pan:
@@ -376,11 +376,14 @@ if __name__ == "__main__":
             if elapsed > 0:
                 fps = 1.0 / elapsed
 
-                print(
-                    f"FPS: {fps:.2f}, "
-                    f"Frame Time: "
-                    f"{elapsed * 1000:.1f} ms"
-                )
+                now = time.monotonic()
+
+                if now - last_fps_log_time >= 1.0:
+                    print(
+                        f"FPS: {fps:.2f}, "
+                        f"Frame Time: {elapsed * 1000:.1f} ms"
+                    )
+                    last_fps_log_time = now
 
             if not args.headless:
 
